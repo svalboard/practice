@@ -1,0 +1,59 @@
+name: Deploy practice
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Full commit SHA from morganvenable/keybard to release
+        required: true
+permissions:
+  contents: read
+concurrency:
+  group: practice-pages
+  cancel-in-progress: false
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          repository: morganvenable/keybard
+          ref: ${{ inputs.ref }}
+      - name: Verify immutable release reference
+        env:
+          RELEASE_REF: ${{ inputs.ref }}
+        run: |
+          [[ "$RELEASE_REF" =~ ^[0-9a-f]{40}$ ]] || { echo "Use a full commit SHA"; exit 1; }
+          test "$(git rev-parse HEAD)" = "$RELEASE_REF"
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - run: npx vitest run tests/practice tests/svalbr
+      - run: npm run build:svalbr
+        env:
+          GIT_BRANCH: practice-release
+          GIT_SHA: ${{ inputs.ref }}
+      - name: Set domain and release provenance
+        env:
+          RELEASE_REF: ${{ inputs.ref }}
+        run: |
+          echo practice.svalboard.com > dist-svalbr/CNAME
+          touch dist-svalbr/.nojekyll
+          printf '{"source":"https://github.com/morganvenable/keybard","commit":"%s"}\n' "$RELEASE_REF" > dist-svalbr/release.json
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist-svalbr
+  deploy:
+    if: github.ref == 'refs/heads/main'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/deploy-pages@v4
+        id: deployment
